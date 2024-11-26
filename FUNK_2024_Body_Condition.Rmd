@@ -1,0 +1,273 @@
+---
+title: "R Notebook for Assessing the Physiological Consequences of Current Management Practices on African Elephants (Loxodonta africana): A Case study from the Nama-Karoo"
+author: "Kyla Funk"
+date: "September 12 2024"
+
+---
+###  Body Condition of Translocated African Elephants (Loxodonta africana) in a Semi-Arid Environment: Effects of Seasonality, Age-Sex, and Management Interventions  
+#### Kyla R. Funk 1, Leslie R. Brown 2, Eric Vander Wal 3
+# 1 Department of Cognitive and Behavioural Ecology, Memorial University of Newfoundland, Canada
+# 2 Applied Behavioural Ecology and Ecosystems Research Unit, University of South Africa, Pretoria, South Africa
+# 3 Department of Biology, Memorial University of Newfoundland, Canada
+
+
+#### Correspondence concerning this article should be addressed to Kyla Funk, Address: Memorial University of Newfoundland, Department of Cognitive and Behavioural Ecology, 1 Arctic Ave, St. John’s, NL, Canada. E-mail: krfunk@mun.ca. Phone: +14037973865
+
+---
+##Load libraries
+```{r}
+library(netTS)
+library(lubridate)
+library(ggplot2)
+library(reshape2)
+library(readxl)
+library(dplyr)
+library(bayesplot)
+library(see)
+library(bayestestR)
+library(brms)
+library(DHARMa)
+library(performance)
+library(stringr)
+library(ggridges)
+library(RColorBrewer)
+library(ggpubr)
+library(tidybayes)
+library(modelr)
+```
+
+##look at data
+```{r load data and plot body condition with other variables}
+BCMonth <- read_excel("FUNK_2024_DataBook.xlsx", sheet = "RawData")
+
+BCMonth <- BCMonth %>% select(
+  Score_Average,
+  D_W,
+  Dry.Wet_Season,
+  AgeSex,
+  Below_Above_Average,
+  ID,
+  Rainfall_Season,
+  Difference_in_Average,
+  ObservationTotalSeason
+)
+
+BCMonth <- transform(BCMonth, Score_Average = as.numeric(Score_Average))
+BCMonth <- transform(BCMonth, D_W = as.factor(D_W))
+BCMonth <- transform(BCMonth, Dry.Wet_Season = as.factor(Dry.Wet_Season))
+BCMonth <- transform(BCMonth, AgeSex = as.factor(AgeSex))
+BCMonth <- transform(BCMonth, Below_Above_Average = as.factor(Below_Above_Average))
+
+BCMonth$Rainfall.s <- scale(BCMonth$Rainfall_Season, center = TRUE, scale = TRUE)
+BCMonth$Average.Diff.s <- scale(BCMonth$Difference_in_Average,
+                                center = TRUE,
+                                scale = TRUE)
+
+
+BCMonth <- na.omit(BCMonth)
+
+ggplot(BCMonth, aes(x = AgeSex, y = Score_Average)) +  geom_boxplot(fill =
+                                                                      'blue')
+ggplot(BCMonth, aes(x = Age, y = Score_Average)) +  geom_boxplot(fill =
+                                                                   'blue')
+ggplot(BCMonth, aes(x = Sex, y = Score_Average)) +  geom_boxplot(fill =
+                                                                   'blue')
+ggplot(BCMonth, aes(x = D_W, y = Score_Average)) +  geom_boxplot(fill =
+                                                                   'blue')
+ggplot(BCMonth, aes(x = Dry.Wet_Season, y = Score_Average)) +  geom_boxplot(fill =
+                                                                              'blue')
+ggplot(BCMonth, aes(x = Below_Above_Average, y = Score_Average)) +  geom_boxplot(fill =
+                                                                                   'blue')
+```
+
+
+##Build beta model, is body score average predicted by age-sex category, pooled dry seasons vs pooled wet seaosns, individual season, rainfall, if the rainfall was above or below avergae, or difference in rainfall from the average rainfall? 
+```{r agesex model}
+
+priors.BRMS.interceptb.norm<- c(
+ 
+  set_prior("normal(0, 1)", class = "b")
+)
+
+M2.BC <- bf(Score_Average ~ AgeSex + D_W + Dry.Wet_Season + Rainfall.s + Below_Above_Average + Average.Diff.s + (1|ID) + offset(log(ObservationTotalSeason))) 
+          
+fit.M2.BC <- brm(M2.BC, 
+                  data = BCMonth, 
+                      family = Beta,
+                            prior=priors.BRMS.interceptb.norm, 
+                                  chains = 4,iter = 2000, 
+                                      control=list(
+                                            max_treedepth = 15), cores = 4)
+```
+
+##checking the Beta model: is it a good fit?
+```{r dispersion checks and summary.}
+# save(fit.M1.2.BC, file = "BodyConditonModel.Rdata")
+# fit.M2.BC <- load("~/Documents/R_Projects/Elephant_BC_Data/Elephant_BC/BodyConditonModel.Rdata")
+bayesplot::color_scheme_set("teal")
+
+
+#PP_Checks for SM
+# Figure S1
+#tiff("M2.PP_Check.tiff", units="in", width=4, height=3, res=400)
+pp_check(fit.M2.BC) + theme(
+  panel.background = element_rect(fill = "transparent", colour = NA),
+  axis.line = element_line(
+    size = 0.5,
+    colour = "black",
+    linetype = 1
+  )
+) +  scale_fill_manual(values = c(pal2[2:3]), name = NULL)
+
+#tiff("M2.PP_Check2.tiff", units="in", width=4, height=3, res=400)
+pp_check(fit.M2.BC, type = "dens") + theme(panel.background = element_rect(fill = "transparent", colour = NA))
+
+#Dispersion Tests for SM
+# Figure S2 A
+#tiff("dispersion.tiff", units="in", width=7, height=5, res=400)
+PosteriorPredictions.fit.M2.BC <- predict(fit.M2.BC, summary = FALSE)
+PosteriorPredictions.fit.M2.BC <- t(PosteriorPredictions.fit.M2.BC)
+medianPosteriorPredictions.fit.M2.BC <- apply(PosteriorPredictions.fit.M2.BC, 1, median)
+observations.fit.M2.BC <- BCMonth$Score_Average
+DharmaM1.bayes.fit.M2.BC <- createDHARMa(
+  fittedPredictedResponse = medianPosteriorPredictions.fit.M2.BC,
+  simulatedResponse = PosteriorPredictions.fit.M2.BC,
+  observedResponse = observations.fit.M2.BC,
+  integerResponse = F
+)
+testDispersion.fit.M2.BC <- testDispersion(DharmaM1.bayes.fit.M2.BC, plot =
+                                             T)
+# Figure S2 B
+#tiff("dispersion2.tiff", units="in", width=7, height=5, res=400)
+plotResiduals(DharmaM1.bayes.fit.M2.BC)
+
+#Summary of output
+# Table 3
+summary(fit.M2.BC)
+#Probability of Direction for BC model
+p_direction(fit.M2.BC, method = "direct", null = 0)
+```
+#Bayesplot 
+```{r Bayesplot - visual summary of Table 3}
+#tiff("M1.Poisson.estimates.tiff", units="in", width=4, height=3, res=400)
+bayesplot::mcmc_areas(
+  as.matrix(fit.M2.BC),
+  regex_pars = c(
+    "b_Intercept",
+    "b_AgeSexFJ",
+    "b_AgeSexMA",
+    "b_AgeSexMJ",
+    "b_D_WW",
+    "b_Dry.Wet_Seasonb.W1",
+    "b_Dry.Wet_Seasonc.D2",
+    "b_Dry.Wet_Seasond.W2",
+    "b_Dry.Wet_Seasone.D3",
+    "b_Dry.Wet_Seasonf.W3",
+    "b_Dry.Wet_Seasong.D4",
+    "b_Dry.Wet_Seasonh.W4",
+    "b_Rainfall.s",
+    "b_Below_Above_AverageB",
+    "b_Average.Diff.s"
+  ),
+  prob = 0.95
+) + geom_vline(xintercept = 0, linetype = "dashed") + theme(
+  axis.ticks.length = unit(-0.25, "cm"),
+  panel.border = element_rect(
+    colour = "black",
+    fill = NA,
+    size = 1
+  ),
+  axis.line = element_line(colour = 'black', size = 1),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  axis.text = element_text(
+    size = 5,
+    color = "black",
+    family = "Helvetica"
+  ),
+  panel.background = element_rect(fill = "transparent", colour = NA),
+  plot.background = element_rect(fill = "transparent", colour = NA),
+  axis.title.x = element_text(family = "Helvetica", size = 10),
+  legend.position = "none"
+) + xlim(-4, 3)
+```
+#getting R2 for Beta model
+```{r conditional and marginal r2}
+m.2.conditional.fit.M2.BC <- bayes_R2(fit.M2.BC)
+m.2.marginal.fit.M2.BC <- bayes_R2(fit.M2.BC, re_formula = NA)
+m.2.conditional.fit.M2.BC
+m.2.marginal.fit.M2.BC
+```
+
+#Plot posterior expectations
+```{r}
+# Expectation draws
+BC_epred <- fit.M2.BC |>
+  add_epred_draws(newdata = BCMonth)
+
+# Figure 1. Plot posterior expectations for relationship between agesex and body score average
+# tiff("PosteriorExpectationsAgeSex.tiff", units="in", width=7, height=5, res=400)
+ggplot(BC_epred) +
+  stat_halfeye(aes(AgeSex, .epred), alpha = 0.5) +
+  labs(x = 'Age-Sex Category', y = 'Body Condition Score Average') +
+  theme(
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.line = element_line(
+      size = 0.5,
+      colour = "black",
+      linetype = 0.5
+    ),
+    axis.ticks.length = unit(-0.25, "cm"),
+    panel.border = element_rect(
+      colour = "black",
+      fill = NA,
+      size = 1
+    )
+  ) +
+  scale_x_discrete(
+    labels = c(
+      "FA" = "Adult females",
+      "FJ" = "Juvenile females",
+      "MA" = "Adult males",
+      "MJ" = "Juvenile males"
+    )
+  )
+
+# Figure 2. Plot posterior expectations for relationship between Season and body score average
+#tiff("PosteriorExpectationsSeason.tiff", units="in", width=7, height=5, res=400)
+ggplot(BC_epred) +
+  stat_halfeye(aes(Dry.Wet_Season, .epred), alpha = 0.5) +
+  labs(x = 'Season', y = 'Body Score Average') +
+  theme(
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.line = element_line(
+      size = 0.5,
+      colour = "black",
+      linetype = 0.5
+    ),
+    axis.ticks.length = unit(-0.25, "cm"),
+    panel.border = element_rect(
+      colour = "black",
+      fill = NA,
+      size = 1
+    )
+  ) +
+  scale_x_discrete(
+    labels = c(
+      "a.D1" = "DS 1",
+      "b.W1" = "WS 1",
+      "c.D2" = "DS 2",
+      "d.W2" = "WS 2",
+      "e.D3" = "DS 3",
+      "f.W3" = "WS 3",
+      "g.D4" = "DS 4",
+      "h.W4" = "WS 4"
+    )
+  )
+
+# Plot posterior expectations for relationship between above or below average rainfall and body score average
+ggplot(BC_epred) +
+  stat_halfeye(aes(Below_Above_Average, .epred), alpha = 0.5) +
+  labs(x = 'Below or Above average rainfall', y = 'Body Score Average')
+
+```
